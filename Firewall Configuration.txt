@@ -1,0 +1,215 @@
+Name: Nicholas McGrann		ID: 25127195
+
+
+
+
+Border Router - Inbound from Internet
+(10) ip access-list extended BR-IN
+
+! Block the evil group entirely
+(20) deny ip 166.60.0.0 0.0.255.255 any
+
+! Anti spoofing
+(30) deny ip 132.11.0.0 0.0.255.255 any
+(40) deny ip 20.0.0.0 0.255.255.255 any
+
+! Allow SMTP to mail relay
+(50) permit tcp any gt 1023 host 132.11.1.10 eq 25
+
+! Allow HTTPS to web server
+(60) permit tcp to any gt 1023 host 132.11.1.20 eq 443
+
+! Allow routing protocol
+(70) permit udp any any eq 520
+
+! Allow return traffic
+(80) permit tcp any eq 25 host 132.11.1.10 gt 1023
+(90) permit tcp any eq 443 host 132.11.1.20 gt 1023
+
+(120) interface FastEthernet0/0
+(130) ip access-group BR-IN in
+(140) exit
+
+
+
+Border Router - Outbound to Internet
+(150) ip access0list extended BR-OUT
+
+! Mail relay sending SMTP
+(160) permit tcp host 132.11.1.10 eq 25 any eq 25
+
+! Web server return to HTTPS traffic
+(170) permit tcp host 132.11.1.20 eq 443 any gt 1023
+
+! Allow routing protocol
+(180) permit udp any eq 520 any
+
+! Default deny
+(190) deny ip any any
+(200) exit
+
+(210) interface FastEthernet0/0
+(220) ip access-group BR-OUT out
+(230) exit
+
+
+
+
+Internal Router - Public to Internal
+(240) ip access-list extended IR-IN-PUBLIC
+
+! Web server to database only
+(250) permit tcp host 132.11.1.20 gt 1023 host 132.11.20.10 eq 1433
+
+! Mail relay to mail hub SMTP
+(260) permit tcp host 132.11.1.10 gt 1023 host 132.11.20.50 eq 25
+
+! Return traffic
+(270) permit tcp host 132.11.20.100 eq 1433 host 132.11.1.20 gt 1023
+(280) permit tcp host 132.11.20.50 eq 25 host 132.11.1.10 gt 1023
+
+! Default deny
+(290) deny ip any any
+(300) exit
+
+(310) interface FastEthernet0/0
+(320) ip access-group IR-IN-PUBLIC in
+(330) exit
+
+
+
+
+Internal Router - Internal protection for servers
+(340) ip access-list extended IR-IN-SERVERS
+
+! Database access from the web server
+(350) permit tcp 132.11.1.20 gt 1023 host 132.11.20.100 eq 1433
+
+! Database access from workstations
+(360) permit tcp 132.11.40.0 0.0.0.255 gt 1023 host 132.11.20.100 eq 1433
+
+! Database access from partner
+(370) permit tcp 20.0.0.0 0.255.255.255 gt 1023 host 132.11.20.100 eq 1433
+
+! Mail hub rules
+(380) permit tcp 132.11.40.0 0.0.0.255 gt 1023 host 132.11.20.50 eq 143
+(390) permit tcp 132.11.40.0 0.0.0.255 gt 1023 host 132.11.20.50 eq 587
+(400) permit tcp host 132.11.1.10 gt 1023 host 132.11.20.50 eq 25
+
+! Return traffic
+(410) permit tcp host 132.11.20.100 eq 1433 any gt 1023
+(420) permit tcp host 132.11.20.50 eq 143 any gt 1023
+(430) permit tcp host 132.11.20.50 eq 587 any gt 1023
+
+! Default deny
+ (440) deny ip any any
+(450) exit
+
+(460) interface FastEthernet0/0
+(470) ip access-group IR-IN-SERVERS in
+(480) exit
+
+
+
+Internal Router - Workstation network
+(490) ip access-list extended WS-OUT
+
+! HTTPS to anywhere
+(500) permit tcp 132.11.40.0 0.0.0.255 gt 1023 any eq 443 reflect WS-REF
+
+! Database access
+(510) permit tcp 132.11.40.0 0.0.0.255 gt 1023 host 132.11.20.100 eq 1433
+
+! Mail access
+(520) permit tcp 132.11.40.0 0.0.0.255 gt 1023 host 132.11.20.50 eq 143
+(530) permit tcp 132.11.40.0 0.0.0.255 gt 1023 host 132.11.20.50 eq 587
+
+!Default deny
+(540) deny ip any any
+(550) exit
+
+(560) ip access-list extended WS-IN
+
+! Allow return traffic only
+(570) evaluate WS-REF
+
+! Default deny
+(580) deny ip any any
+(590) exit
+
+(600) interface FastEthernet0/0
+(610) ip access-group WS-OUT in
+(620) ip access-group WS-IN out
+(630) exit
+
+
+
+
+ACLs I used
+      I used a total of 5 ACLs.
+	The border router contains the inbound ACL BR-IN on the interface connected to the internet. It blocks the Evil group, enforces anti-spoofing, and allows mail relay and HTTPS traffic from legitimate sources. The border router also contains the outbound ACL BR-OUT which handles outgoing traffic such as the mail relay SMTP and web server responses as well as chosen routing protocol. 
+      The internal router contains the ACLS IR-IN-PUBLIC, IR-IN-SERVERS, WS-OUT and WS-IN (WS-OUT and WS-IN are reflexive, "together as one"). IR-IN-PUBLIC filters traffic from the public server network to the internal servers, controlling web server access to the database and mail relay access to the mail hub. The IR-IN-SERVERS regulates access to the internal database server and mail hub server from workstations and the partner network. The Workstation network used reflexive ACLs, WS-OUT and WS-IN applied to the internal router interface connected the workstations, which allow only outbound requests form the workstations and their corresponding return traffic, blocking unsolicited inbound connections.
+
+
+
+
+
+Firewall Evaluation Questions
+1. Machine 166.60.6.6:T4077 sends a HTTPS request to public web server 132.11.1.20:T443. 
+Dropped by (20)   source IP is in evil group
+
+2. Machine 166.60.6.6 uses spoofed source IP address 132.11.40.10:T12345 to send a HTTPS request to Public Web Server 132.11.1.20:T443. 
+Dropped by (30), an implicit deny   spoofed internal IP from internet
+
+3. Machine 166.60.6.6 uses spoofed source IP address 172.16.1.1:T5425 to send a SMTP query to Mail Relay Server 132.11.1.10:T25. 
+Dropped by (30)   spoofed IP, not allowed
+
+4. Machine 4.14.54.33:T2233 sends a HTTP request to Web Server 132.11.1.20:T80. 
+Dropped by (100)   only HTTPS allowed to web server
+
+5. Machine 123.5.4.3:T4321 sends a HTTPS request to Web Server 132.11.1.20:T443. 
+Passed by (60)   return traffic passed by (90)
+
+6. Machine 20.200.200.1:T6789 establishes a TCP connection to MS Database Server 132.11.20.100:T1433. 
+Passed by (370)   return traffic passed by (410)
+
+7. Machine 20.200.200.1:T1023 132.11.20.100:T1433. establishes connection MS Database Server 
+Dropped by (370)   client port in less than or equal to 1023 not allowed
+
+8. Router 4.4.4.4 uses your chosen routing protocol with suitable ports (if applicable) to send routing information to border router 10.10.10.10. 
+Passed by (70)   return traffic passed by (180)
+
+9. Web Server 132.11.1.20:T443 establishes a TCP connection to machine 211.4.3.2:T6789. 
+Passed by (170)   return traffic passed by (60)
+
+10. Web Server 132.11.1.20:T6789 establishes a TCP connection MS Database Server 132.11.20.100:T1433 
+Passed by (350)   return traffic passed by (410)
+
+11. Mail Relay Server 132.11.1.10:T7612 establishes TCP connection to outside mail server 155.3.2.14:T25. 
+Passed by (160)   return traffic passed by (50)
+
+12. Mail Relay Server 132.11.1.10:T1425 establishes TCP connection to MS Database Server 132.11.20.100:T1433. 
+Dropped by (440)   database cannot be initiated by mail relay
+
+13. Outside mail server 188.33.3.3:T25 establishes a SMTP connection to Mail Relay Server 132.11.1.10:T25. 
+Passed by (50)   return traffic passed by (160)
+
+14. MS Database Server 132.11.20.100:T2233 sends a HTTPS request to Web Server 132.11.1.20:T443. 
+Dropped by (350)   database cannot initiate connections
+
+15. PC 132.11.40.10:T443 sends a HTTPS request to Web server 20.1.1.1:T443. 
+Passed by (500)   return traffic passed by (570)
+
+16. PC 132.11.40.10:T1234 sends a HTTPS request to Web server 5.1.2.3:T443. 
+Passed by (500)   return traffic passed by (570)
+
+17. PC 132.11.40.10:T1234 establishes a connection to retrieve email from Mail Hub Server 132.11.20.50:T143. 
+Passed by (380)   return traffic passed by (420)
+
+18. PC 132.11.40.201:T5555 establishes a connection to DataBase Server 132.11.20.100:T1433. 
+Passed by (360)   return traffic passed by (410)
+19. PC 132.11.40.55:T2044 establishes SMTP connection to Mail Relay Server 132.11.1.10:T25. 
+Passed by (50)   return traffic passed by (160)
+
+20. Machine 166.60.6.6 uses spoofed source IP address 20.1.1.1:T443 to send a HTTPS response to Internal PC 132.11.40.40:T9876 (without previous request from 132.11.40.40).
+Dropped by (20)   evil group source and no outbound session
